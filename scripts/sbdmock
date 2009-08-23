@@ -92,9 +92,13 @@ class SBError(Error):
     def __init__(self, msg):
         Error.__init__(self, msg, 50)
 
+class InstallError(Error):
+    """ Error generated in case of intallation check problems """
+    def __init__(self, msg):
+        Error.__init__(self, msg, 60)
 
-class SBBuilder:
-    """base Scratcbox builder object"""
+class SBBase:
+    """base Scratcbox object"""
     def __init__(self, config):
         self._state = 'unstarted'
         self.tmplog = []
@@ -147,8 +151,6 @@ class SBBuilder:
         # open the log files
         root_log = os.path.join(self.resultdir, 'root.log')
         self._root_log = open(root_log, 'w+')
-        build_log = os.path.join(self.resultdir, 'build.log')
-        self._build_log = open(build_log, 'w+')
         
         # write out the config file
         cfg_log = os.path.join(self.resultdir, 'sbdmockconfig.log')
@@ -158,19 +160,6 @@ class SBBuilder:
         cfgout.write('statedir=%s\n' % self.statedir)
         cfgout.flush()
         cfgout.close()
-    
-    
-    def build_log(self, content):
-        """Write content (it could be string or array of strings) to build.log"""
-        if isinstance(content, types.ListType):
-            for line in content:
-                self._build_log.write('%s\n' % line)
-        elif isinstance(content, types.StringType):
-            self._build_log.write('%s\n' % content)
-        else:
-            # wtf?
-            pass
-        self._build_log.flush()
     
     
     def root_log(self, content):
@@ -300,188 +289,6 @@ class SBBuilder:
         
         return (retval, output)
     
-    
-    def build(self, dsc):
-        """build an source package into binary debs, capture log"""
-        
-        self.state("setup")
-        
-        orgdir = os.path.dirname(dsc)
-        dscname = os.path.basename(dsc)
-        cdsc = ChangeFile()
-        cdsc.load_from_file(dsc)
-        try:
-            cdsc.verify(orgdir)
-        except Exception, err:
-            raise PkgError, "Source package verification failed: %s" % err
-        
-        self.root_log("Copying source files to work dir")
-        
-        filelist = []
-        filelist.append(dscname)
-        for item in cdsc.getFiles():
-            filelist.append(item[4])
-        for filen in filelist:
-            self.debug("copying file %s" % filen)
-            shutil.copy2(os.path.join(orgdir, filen), self.workdir)
-        
-        self.root_log("Extracting sources to work dir")
-        cmd = "cd %s && dpkg-source -x %s " % (self.sb_workdir, dscname)
-        self.root_log(cmd)
-        (retval, output) = self.do_chroot(cmd)
-        self.root_log(output)
-        
-        pkgsubdir = "%s-%s" % (cdsc['source'], DpkgVersion(cdsc['version']).upstream)
-        
-        fpath = os.path.join(self.workdir, pkgsubdir)
-        if not os.path.isdir(fpath):
-            self.debug("dpkg-source output: %s" % output)
-            self.debug("Expected location should be: %s" % pkgsubdir)
-            raise PkgError, "Can't find package source directory %s after unpacking sources" % pkgsubdir
-        
-        self.install_build_deps(pkgsubdir)
-        
-        # take source package, pass to install_build_deps() and do build
-        cmd = "cd %s && %s" % (os.path.join(self.sb_workdir, pkgsubdir), self.config['dpkg-buildpackage'])
-        self.state("build")
-        
-        for variable, value in self.config['env'].iteritems():
-            if value is not None:
-                self.build_log('%s="%s"' % (variable, value))
-        
-        #self.root_log(cmd)
-        (retval, output) = self.do_chroot_ng(cmd)
-        
-        #self.build_log(output)
-        
-        if retval != 0:
-            raise BuildError, "Error building package %s, See build log" % dsc
-        
-        changes = glob.glob(os.path.join(self.workdir,"*.changes"))
-        changes_file = changes[0]
-        
-        chgs = ChangeFile()
-        chgs.load_from_file(changes_file)
-        try:
-            chgs.verify(self.workdir)
-        except Exception, err:
-            raise BuildError, "Built packages verification failed: %s" % err
-        
-        filelist = []
-        filelist.append(changes_file)
-        for item in chgs.getFiles():
-            filelist.append(item[4])
-        
-        self.root_log("Copying packages to result dir")
-        for item in filelist:
-            shutil.copy2(os.path.join(self.workdir, item), self.resultdir)
-    
-    
-    def install_build_deps(self, pkgsubdir):
-        """try to satisfy build-deps for package"""
-        
-        self.debug("Checking build-deps first time")
-        builddeps = self._sb_check_pkg_builddepends(pkgsubdir)
-        if not builddeps:
-            self.debug("We are lucky, all deps already here")
-            return
-        
-        self.root_log("Trying to install build-deps")
-        (ret, builddeps) = self._sb_try_satisfy_build_deps(builddeps, pkgsubdir)
-        if ret and not builddeps:
-            return
-        
-        self.root_log("Checking build environment...")
-        builddeps = self._sb_check_pkg_builddepends(pkgsubdir)
-        if builddeps:
-            self.root_log("Unable to satisfy build-deps: %s" % builddeps)
-            raise PkgError, "Unable to satisfy build-deps: %s" % builddeps
-        self.root_log("Seems ok")
-    
-    
-    def _sb_try_satisfy_build_deps(self, builddeps, pkgsubdir):
-        """ Tries to satisfy build dependencies by apt-get & dpkg-checkbuilddeps"""
-        self.debug("Builddeps: '%s'" % builddeps)
-        depends, variants = self._deb_build_alts(builddeps)
-        if depends:
-            self.root_log("Try to install static depends: %s" % depends)
-            self.apt("install --no-remove %s" % depends)
-        bdep = ""
-        if variants:
-            for variant in variants:
-                self.root_log("Try to install alt dependencies: %s" % variant)
-                try:
-                    self.apt("install --no-remove %s" % variant)
-                except AptError:
-                    # we can skip that error, and try another variant
-                    continue
-                self.root_log("Checking dependencies...")
-                bdep = self._sb_check_pkg_builddepends(pkgsubdir)
-                if not bdep:
-                    self.root_log("Build-deps satisfied")
-                    return (True,'')
-                else:
-                    self.root_log("Unmet build-dep: %s Trying next variant" % bdep)
-        if not bdep:
-            bdep =  self._sb_check_pkg_builddepends(pkgsubdir)
-            if not bdep:
-                return (True, '')
-            else:
-                return (False, bdep)
-        else:
-            self.root_log("Some dependencies still unmet: %s" % bdep)
-            return (False, bdep)
-    
-    
-    def _sb_check_pkg_builddepends(self, pkgsubdir):
-        """Executes dpkg-checkbuilddeps and provides result"""
-        self.debug("Checking dependencies ...")
-        cmd = "cd %s && dpkg-checkbuilddeps" % os.path.join(self.sb_workdir, pkgsubdir)
-        self.root_log(cmd)
-        (retval, output) = self.do_chroot(cmd)
-        
-        if retval == 0:
-            self.debug("All dependencies already met")
-            return None
-        mtch = re.search('dpkg-checkbuilddeps: Unmet build dependencies: (.+)$', output)
-        if mtch:
-            builddeps = mtch.group(1)
-        else:
-            self.debug("dpkg-checkbuilddeps output: %s" % output)
-            raise PkgError, "Can't parse output of dpkg-checkbuilddeps"
-        self.debug("Unment build dependencies: %s" % builddeps)
-        return builddeps.strip()
-    
-    
-    def _deb_build_alts(self, builddeps):
-        """make array of variants in case"""
-        variants = []
-        # let's strip version deps, apt-get dosn't understand it
-        builddeps = re.sub('\(.+?\)', "", builddeps)
-        # Do we have alts ?
-        if builddeps.find('|') < 0:
-            # we are lucky, only one variant
-            return (builddeps, [])
-        else:
-            regexp = "("+PackageRegex + "(\s*\|\s*" + PackageRegex +")+)"
-            alts_arr = []
-            alts = re.findall(regexp, builddeps)
-            for astr in alts:
-                if len(astr) == 2:
-                    # array of matches
-                    builddeps = builddeps.replace(astr[0], "")
-                    alts_arr.append(re.split('\s*\|\s*', astr[0]))
-                else:
-                    # match itself?
-                    builddeps = builddeps.replace(astr, "")
-                    alts_arr.append(re.split('\s*\|\s*', astr))
-            vrs = self._mss_variants(alts_arr)
-            for item in vrs:
-                astr = " ".join(item)
-                variants.append(astr)
-            return (builddeps, variants)
-    
-    
     def _mss_variants(self, deps):
         variants = [[]]
         
@@ -502,7 +309,6 @@ class SBBuilder:
         """unmount things and clean up a bit"""
         self.root_log("Cleaning up...")
         self.state("ending")
-        self._build_log.close()
         self._sb_killall()
         if self.config['uniqueext-auto']:
             self.root_log("Removing temporary target...")
@@ -556,11 +362,11 @@ class SBBuilder:
     
     def _sb_create_target(self):
         """Creates target from specification"""
+
         if not self.config['compiler-name']:
             raise SBError, "No compilers specified for target %s, exiting" % self.sbtarget
         if not self.config['devkits']:
             raise SBError, "No devkits specified for target %s, exiting" % self.sbtarget
-        
         cmdline = "sb-conf setup %s -f -c %s -d %s" % (self.sbtarget, self.config['compiler-name'], self.config['devkits'])
         if self.config['cputransparency-method']:
             cmdline += " -t %s" % self.config['cputransparency-method']
@@ -801,6 +607,9 @@ class SBBuilder:
         aptsconf_fo = open(aptsconf, 'w')
         aptsconf_content = self.config['sources.list']
         aptsconf_fo.write(aptsconf_content)
+
+        # remove sources.list.d directory
+        shutil.rmtree(aptsconf + '.d')
         
         # files in /etc that need doing
         filedict = self.config['files']
@@ -864,6 +673,236 @@ class SBBuilder:
             os.unlink(dname)
 
 
+class SBBuilder(SBBase):
+    """Scratcbox builder object"""
+
+    def __init__(self, config):
+        SBBase.__init__(self, config)
+        build_log = os.path.join(self.resultdir, 'build.log')
+        self._build_log = open(build_log, 'w+')
+
+    def build(self, dsc):
+        """build an source package into binary debs, capture log"""
+
+        self.state("setup")
+
+        orgdir = os.path.dirname(dsc)
+        dscname = os.path.basename(dsc)
+        cdsc = ChangeFile()
+        cdsc.load_from_file(dsc)
+        try:
+            cdsc.verify(orgdir)
+        except Exception, err:
+            raise PkgError, "Source package verification failed: %s" % err
+
+        self.root_log("Copying source files to work dir")
+
+        filelist = []
+        filelist.append(dscname)
+        for item in cdsc.getFiles():
+            filelist.append(item[4])
+        for filen in filelist:
+            self.debug("copying file %s" % filen)
+            shutil.copy2(os.path.join(orgdir, filen), self.workdir)
+
+        self.root_log("Extracting sources to work dir")
+        cmd = "cd %s && dpkg-source -x %s " % (self.sb_workdir, dscname)
+        self.root_log(cmd)
+        (retval, output) = self.do_chroot(cmd)
+        self.root_log(output)
+
+        pkgsubdir = "%s-%s" % (cdsc['source'], DpkgVersion(cdsc['version']).upstream)
+
+        fpath = os.path.join(self.workdir, pkgsubdir)
+        if not os.path.isdir(fpath):
+            self.debug("dpkg-source output: %s" % output)
+            self.debug("Expected location should be: %s" % pkgsubdir)
+            raise PkgError, "Can't find package source directory %s after unpacking sources" % pkgsubdir
+
+        self.install_build_deps(pkgsubdir)
+
+        # take source package, pass to install_build_deps() and do build
+        cmd = "cd %s && %s" % (os.path.join(self.sb_workdir, pkgsubdir), self.config['dpkg-buildpackage'])
+        self.state("build")
+
+        for variable, value in self.config['env'].iteritems():
+            if value is not None:
+                self.build_log('%s="%s"' % (variable, value))
+
+        #self.root_log(cmd)
+        (retval, output) = self.do_chroot_ng(cmd)
+
+        #self.build_log(output)
+
+        if retval != 0:
+            raise BuildError, "Error building package %s, See build log" % dsc
+
+        changes = glob.glob(os.path.join(self.workdir,"*.changes"))
+        changes_file = changes[0]
+
+        chgs = ChangeFile()
+        chgs.load_from_file(changes_file)
+        try:
+            chgs.verify(self.workdir)
+        except Exception, err:
+            raise BuildError, "Built packages verification failed: %s" % err
+
+        filelist = []
+        filelist.append(changes_file)
+        for item in chgs.getFiles():
+            filelist.append(item[4])
+
+        self.root_log("Copying packages to result dir")
+        for item in filelist:
+            shutil.copy2(os.path.join(self.workdir, item), self.resultdir)
+
+    def install_build_deps(self, pkgsubdir):
+        """try to satisfy build-deps for package"""
+
+        self.debug("Checking build-deps first time")
+        builddeps = self._sb_check_pkg_builddepends(pkgsubdir)
+        if not builddeps:
+            self.debug("We are lucky, all deps already here")
+            return
+
+        self.root_log("Trying to install build-deps")
+        (ret, builddeps) = self._sb_try_satisfy_build_deps(builddeps, pkgsubdir)
+        if ret and not builddeps:
+            return
+
+        self.root_log("Checking build environment...")
+        builddeps = self._sb_check_pkg_builddepends(pkgsubdir)
+        if builddeps:
+            self.root_log("Unable to satisfy build-deps: %s" % builddeps)
+            raise PkgError, "Unable to satisfy build-deps: %s" % builddeps
+        self.root_log("Seems ok")
+
+    def _sb_check_pkg_builddepends(self, pkgsubdir):
+        """Executes dpkg-checkbuilddeps and provides result"""
+        self.debug("Checking dependencies ...")
+        cmd = "cd %s && dpkg-checkbuilddeps" % os.path.join(self.sb_workdir, pkgsubdir)
+        self.root_log(cmd)
+        (retval, output) = self.do_chroot(cmd)
+
+        if retval == 0:
+            self.debug("All dependencies already met")
+            return None
+        mtch = re.search('dpkg-checkbuilddeps: Unmet build dependencies: (.+)$', output)
+        if mtch:
+            builddeps = mtch.group(1)
+        else:
+            self.debug("dpkg-checkbuilddeps output: %s" % output)
+            raise PkgError, "Can't parse output of dpkg-checkbuilddeps"
+        self.debug("Unment build dependencies: %s" % builddeps)
+        return builddeps.strip()
+
+
+    def _sb_try_satisfy_build_deps(self, builddeps, pkgsubdir):
+        """ Tries to satisfy build dependencies by apt-get & dpkg-checkbuilddeps"""
+        self.debug("Builddeps: '%s'" % builddeps)
+        depends, variants = self._deb_build_alts(builddeps)
+        if depends:
+            self.root_log("Try to install static depends: %s" % depends)
+            self.apt("install --no-remove %s" % depends)
+        bdep = ""
+        if variants:
+            for variant in variants:
+                self.root_log("Try to install alt dependencies: %s" % variant)
+                try:
+                    self.apt("install --no-remove %s" % variant)
+                except AptError:
+                    # we can skip that error, and try another variant
+                    continue
+                self.root_log("Checking dependencies...")
+                bdep = self._sb_check_pkg_builddepends(pkgsubdir)
+                if not bdep:
+                    self.root_log("Build-deps satisfied")
+                    return (True,'')
+                else:
+                    self.root_log("Unmet build-dep: %s Trying next variant" % bdep)
+        if not bdep:
+            bdep =  self._sb_check_pkg_builddepends(pkgsubdir)
+            if not bdep:
+                return (True, '')
+            else:
+                return (False, bdep)
+        else:
+            self.root_log("Some dependencies still unmet: %s" % bdep)
+            return (False, bdep)
+
+    def _sb_check_pkg_builddepends(self, pkgsubdir):
+        """Executes dpkg-checkbuilddeps and provides result"""
+        self.debug("Checking dependencies ...")
+        cmd = "cd %s && dpkg-checkbuilddeps" % os.path.join(self.sb_workdir, pkgsubdir)
+        self.root_log(cmd)
+        (retval, output) = self.do_chroot(cmd)
+
+        if retval == 0:
+            self.debug("All dependencies already met")
+            return None
+        mtch = re.search('dpkg-checkbuilddeps: Unmet build dependencies: (.+)$', output)
+        if mtch:
+            builddeps = mtch.group(1)
+        else:
+            self.debug("dpkg-checkbuilddeps output: %s" % output)
+            raise PkgError, "Can't parse output of dpkg-checkbuilddeps"
+        self.debug("Unment build dependencies: %s" % builddeps)
+        return builddeps.strip()
+
+    def _deb_build_alts(self, builddeps):
+        """make array of variants in case"""
+        variants = []
+        # let's strip version deps, apt-get dosn't understand it
+        builddeps = re.sub('\(.+?\)', "", builddeps)
+        # Do we have alts ?
+        if builddeps.find('|') < 0:
+            # we are lucky, only one variant
+            return (builddeps, [])
+        else:
+            regexp = "("+PackageRegex + "(\s*\|\s*" + PackageRegex +")+)"
+            alts_arr = []
+            alts = re.findall(regexp, builddeps)
+            for astr in alts:
+                if len(astr) == 2:
+                    # array of matches
+                    builddeps = builddeps.replace(astr[0], "")
+                    alts_arr.append(re.split('\s*\|\s*', astr[0]))
+                else:
+                    # match itself?
+                    builddeps = builddeps.replace(astr, "")
+                    alts_arr.append(re.split('\s*\|\s*', astr))
+            vrs = self._mss_variants(alts_arr)
+            for item in vrs:
+                astr = " ".join(item)
+                variants.append(astr)
+            return (builddeps, variants)
+
+    def build_log(self, content):
+        """Write content (it could be string or array of strings) to build.log"""
+        if isinstance(content, types.ListType):
+            for line in content:
+                self._build_log.write('%s\n' % line)
+        elif isinstance(content, types.StringType):
+            self._build_log.write('%s\n' % content)
+        else:
+            # wtf?
+            pass
+        self._build_log.flush()
+
+    def close(self):
+        SBBase.close(self)
+        self._build_log.close()
+
+class SBInstaller(SBBase):
+    """Scratchbox installer object"""
+
+    def __init__(self, config):
+        SBBase.__init__(self, config)
+
+    def install(self, packages):
+        self.debug('install packagesi: %s', ' '.join(packages))
+        self.apt("install %s" % ' '.join(packages))
+
 def update_build_options(buildops, newops):
     boa = buildops.split(",")
     opsa = newops.split(",")
@@ -897,7 +936,8 @@ def command_parse():
     usage: sbdmock [options] /path/to/dsc
     optional commands:
         clean - clean out the specified chroot
-        init - initialize the chroot, do not build anything"""
+        init - initialize the chroot, do not build anything
+        install - install package(s)"""
     parser = OptionParser(usage=usage)
     parser.add_option("-r", action="store", type="string", dest="target",
                       default='default',
@@ -1109,6 +1149,22 @@ def main():
         
         my.close()
         print 'Finished initializing target'
+
+    elif args[0] == 'install':
+        if not args[1:]:
+            error("No packages provided")
+            sys.exit()
+        try:
+            my = SBInstaller(config_opts)
+            my.prep()
+            my.install(args[1:])
+        except Error, err:
+            error("Error occured: %s" % err.msg)
+            if my:
+                my.close()
+            sys.exit(err.resultcode)
+        my.close()
+        print 'Finished installation check'
     
     else:
         if args[0] == 'rebuild':

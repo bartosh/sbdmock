@@ -1,3 +1,9 @@
+sbdmock (0.5.0) unstable; urgency=low
+
+  * Implemented installation check
+
+ -- Ed Bartosh <bartosh@gmail.com>  Sun, 23 Aug 2009 21:27:41 +0300
+
 sbdmock (0.4.3) unstable; urgency=low
 
   * Fixed issue while removing work directories after very bad packages
