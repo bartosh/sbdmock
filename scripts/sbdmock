@@ -281,7 +281,11 @@ class SBBuilder:
         # After each rootstrap extraction, we need to replace special files in target
         self._sb_extract_special_files()
         self.apt("update")
-    
+
+        # Run command after rootstrap unpacking if specified
+        if self.config["after_rootstrap"]:
+            self.debug("after_rootstrap: command %s" % self.config["after_rootstrap"])
+            self.do_chroot_ng(self.config["after_rootstrap"])
     
     def apt(self, cmd):
         """executes apt-get inside target"""
@@ -966,6 +970,7 @@ def main():
         'rm': 'rm',
         'dpkg-buildpackage': 'dpkg-buildpackage -rfakeroot -uc -us -sa -D',
         'apt-get_options': '',
+        'after_rootstrap': '',
         'scratchbox': '/scratchbox/login',
         'sources.list': '',
         'uniqueext': '',

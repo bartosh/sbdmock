@@ -1,3 +1,9 @@
+sbdmock (0.4.4) unstable; urgency=low
+
+  * implemented running command after rootstrap unpacking
+
+ -- Ed Bartosh <bartosh@gmail.com>  Sun, 08 Nov 2009 12:44:08 +0200
+
 sbdmock (0.4.3) unstable; urgency=low
 
   * Fixed issue while removing work directories after very bad packages
