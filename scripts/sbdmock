@@ -734,13 +734,33 @@ class SBBuilder:
         return (ret, output)
     
     def _sb_extract_special_files(self):
+        def filter_srclist(sourceslist):
+            results = {}
+            for line in sourceslist.splitlines():
+                splitted = line.split()
+                key = tuple(splitted[:3])
+                if key not in results:
+                    results[key] = set(splitted[3:])
+                else:
+                    results[key] = results[key].union(set(splitted[3:]))
+            return '\n'.join([ ' '.join(key) + ' ' + ' '.join(value) \
+                                    for key, value in results.iteritems()])
+
+                    
         # write in sources.list into chroot
         aptsconf = os.path.join(self.sb.get_targetdir(), 'etc', 'apt','sources.list')
         self.debug("Extracting sources.list (%s)" % aptsconf)
         aptsconf_fo = open(aptsconf, 'w')
         aptsconf_content = self.config['sources.list']
-        aptsconf_fo.write(aptsconf_content)
-        
+        # Remove duplicate entries.
+        filteredcontent = filter_srclist(aptsconf_content)
+        aptsconf_fo.write(filteredcontent)
+
+        # Write sources.list into log file
+        self.root_log("--sources.list--")
+        self.root_log(filteredcontent)
+        self.root_log("----------------")
+
         # files in /etc that need doing
         filedict = self.config['files']
         for key in filedict:

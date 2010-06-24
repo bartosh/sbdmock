@@ -1,3 +1,10 @@
+sbdmock (0.4.11) unstable; urgency=low
+
+  * Filtered duplicates from sources.list before writing it down
+  * Put content of sources.list into root.log
+
+ -- Ed Bartosh <eduard.bartosh@nokia.com>  Thu, 24 Jun 2010 17:57:28 +0300
+
 sbdmock (0.4.10) unstable; urgency=low
 
   * prep: reverted back changes from r0.4.9
