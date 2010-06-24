@@ -605,7 +605,7 @@ class SBBuilder:
         self.debug("Executing(scratchbox) %s" % command)
         (sbtmpfd, sbtmpname) = tempfile.mkstemp('.sh', 'sbdmock-', self.sb.get_tmpdir())
         sb_tmpname = os.path.join(self.sb.get_sb_tmpdir(), os.path.basename(sbtmpname))
-        self.debug("tmpfile %s %s" % (sbtmpname,sb_tmpname))
+        self.debug("tmpfile %s %s" % (sbtmpname, sb_tmpname))
         
         self._sb_make_cmdfile(command, sbtmpfd)
         os.close(sbtmpfd)
@@ -633,7 +633,7 @@ class SBBuilder:
         self.debug("Executing(scratchbox) %s" % command)
         (sbtmpfd, sbtmpname) = tempfile.mkstemp('.sh', 'sbdmock-', self.sb.get_tmpdir())
         sb_tmpname = os.path.join(self.sb.get_sb_tmpdir(), os.path.basename(sbtmpname))
-        self.debug("tmpfile %s %s" % (sbtmpname,sb_tmpname))
+        self.debug("tmpfile %s %s" % (sbtmpname, sb_tmpname))
         
         self._sb_make_cmdfile(command, sbtmpfd)
         os.close(sbtmpfd)
